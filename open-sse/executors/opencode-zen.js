@@ -49,12 +49,39 @@ function nativeSession(headers) {
 }
 
 function translatedSession(sessionId, clientTool) {
+  // Encode as a CLI-shaped id (see cliSessionId): the free-tier edge
+  // validates the ses_ layout and FreeTierErrors anything else.
   const digest = crypto
     .createHash("sha256")
     .update(`opencode-zen\0${clientTool || "generic"}\0${sessionId}`)
-    .digest("hex")
-    .slice(0, 32);
-  return `ses_${digest}`;
+    .digest();
+  return cliIdFromHash("ses", digest);
+}
+
+const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+// Port of the OpenCode CLI Identifier.create (ascending): `<prefix>_` + 12-hex
+// time field + 14 base62 chars (26 chars after the prefix).
+function cliIdFromHash(prefix, hash) {
+  let timeHex = hash.subarray(0, 6).toString("hex");
+  if (/^0+$/.test(timeHex)) timeHex = `${timeHex.slice(0, 11)}1`;
+  let tail = "";
+  for (let i = 0; i < 14; i++) tail += BASE62_CHARS[hash[6 + i] % 62];
+  return `${prefix}_${timeHex}${tail}`;
+}
+
+let idCounter = 0;
+function cliIdFresh(prefix) {
+  const mask = (BigInt(1) << BigInt(48)) - BigInt(1);
+  const now = (BigInt(Date.now()) * BigInt(0x1000) + BigInt((idCounter++ % 0xfff) + 1)) & mask;
+  const timeBytes = Buffer.alloc(6);
+  for (let i = 0; i < 6; i++) timeBytes[i] = Number((now >> BigInt(40 - 8 * i)) & BigInt(0xff));
+  const tailBytes = crypto.randomBytes(14);
+  let tail = "";
+  for (let i = 0; i < 14; i++) tail += BASE62_CHARS[tailBytes[i] % 62];
+  let timeHex = timeBytes.toString("hex");
+  if (/^0+$/.test(timeHex)) timeHex = `${timeHex.slice(0, 11)}1`;
+  return `${prefix}_${timeHex}${tail}`;
 }
 
 // Strip the thinking suffix "model(level)" so checks hit the base id.
@@ -210,7 +237,12 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
       };
     }
     const credentials = this.prepareRequestCredentials(args);
-    return super.execute({ ...args, credentials });
+    // Free tier rejects non-streaming requests with FreeTierError — the
+    // OpenCode client always streams. Force stream upstream for free models;
+    // chatCore converts SSE back to JSON for non-streaming clients
+    // (see handleNonStreamingResponse's text/event-stream branch).
+    const forced = isFreeOpencodeZenModel(args?.model) && !args?.stream;
+    return super.execute(forced ? { ...args, stream: true, credentials } : { ...args, credentials });
   }
 
   buildHeaders(credentials, stream = true, url, model) {
@@ -249,8 +281,7 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
       || prepared
       || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
     if (!headers["x-opencode-request"]) {
-      headers["x-opencode-request"] = lower["x-opencode-request"]
-        || `msg_${crypto.randomUUID().replace(/-/g, "")}`;
+      headers["x-opencode-request"] = lower["x-opencode-request"] || cliIdFresh("msg");
     }
     return headers;
   }
@@ -263,6 +294,8 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
       && Object.prototype.hasOwnProperty.call(out, "client_metadata")) {
       delete out.client_metadata;
     }
+    // Free tier rejects non-streaming bodies with FreeTierError: always stream.
+    if (isFreeOpencodeZenModel(model || body?.model)) out.stream = true;
     if (!isResponsesModel(model || body?.model)) return out;
     const normalized = normalizeResponsesInput(out.input);
     if (normalized) out.input = normalized;

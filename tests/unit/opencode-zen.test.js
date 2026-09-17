@@ -111,7 +111,8 @@ describe("OpenCode Zen split-auth (free models never get the key)", () => {
     expect(h["x-api-key"]).toBeUndefined();
     expect(h["User-Agent"]).toMatch(/^opencode\//);
     expect(h["x-opencode-client"]).toBe("desktop");
-    expect(h["x-opencode-session"]).toMatch(/^ses_/);
+    expect(h["x-opencode-session"]).toMatch(/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+    expect(h["x-opencode-request"]).toMatch(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
   });
 
   it("sends Bearer on chat/completions and /responses for paid models", () => {
@@ -161,6 +162,40 @@ describe("OpenCode Zen split-auth (free models never get the key)", () => {
     }, false, "https://opencode.ai/zen/v1/messages", "claude-sonnet-4.6");
     expect(headers["x-api-key"]).toBe("sk-zen-test");
     expect(headers["Authorization"]).toBeUndefined();
+  });
+
+  it("forces stream:true upstream for free models (non-streaming gets FreeTierError)", async () => {
+    const ex = new OpenCodeZenExecutor();
+    // transformRequest level: body must carry stream:true even for JSON callers.
+    const out = ex.transformRequest(
+      "mimo-v2.5-free",
+      { model: "mimo-v2.5-free", messages: [{ role: "user", content: "hi" }], stream: false },
+      false,
+      {},
+    );
+    expect(out.stream).toBe(true);
+    // paid models keep the caller's stream value.
+    const paid = ex.transformRequest(
+      "deepseek-v4-flash",
+      { model: "deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], stream: false },
+      false,
+      { apiKey: "sk-zen-test" },
+    );
+    expect(paid.stream).toBe(false);
+    // execute level: a JSON (stream:false) free request still goes out streamed.
+    const fetchMock = vi.mocked(proxyAwareFetch);
+    fetchMock.mockResolvedValue(new Response('data: {"choices":[]}\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    }));
+    await ex.execute({
+      model: "mimo-v2.5-free",
+      body: { model: "mimo-v2.5-free", messages: [{ role: "user", content: "hi" }], stream: false },
+      stream: false,
+      credentials: {},
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body).stream).toBe(true);
   });
 
   it("forces responses-only models to /responses even with a stale chat transport", () => {
