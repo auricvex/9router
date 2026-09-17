@@ -224,12 +224,11 @@ export class OpenCodeZenExecutor extends DefaultExecutor {
       delete headers["Authorization"];
       delete headers["x-api-key"];
     } else if (typeof url === "string" && url.endsWith("/responses")) {
-      // Zen /responses takes x-api-key, not Bearer (same host quirk as #12633).
+      // /responses reads Bearer auth, even when buildUrl overrides a stale
+      // /messages runtime transport that supplied x-api-key.
       const key = credentials?.apiKey || credentials?.accessToken;
-      if (key) {
-        delete headers["Authorization"];
-        headers["x-api-key"] = key;
-      }
+      delete headers["x-api-key"];
+      if (key) headers["Authorization"] = `Bearer ${key}`;
     }
 
     // OpenCode client identity: client values win, CLI defaults fill the gaps.

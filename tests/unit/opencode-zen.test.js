@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
 import { PROVIDER_MODELS, getModelTargetFormat, getModelSupportedFormats, getDefaultModel } from "../../open-sse/config/providerModels.js";
 import { PROVIDERS } from "../../open-sse/config/providers.js";
 import { resolveTransport } from "../../open-sse/services/provider.js";
@@ -11,6 +12,13 @@ import {
   isPremiumOpencodeZenModel,
 } from "../../open-sse/executors/opencode-zen.js";
 import { getExecutor } from "../../open-sse/executors/index.js";
+
+vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
+  proxyAwareFetch: vi.fn(),
+}));
+import { proxyAwareFetch } from "../../open-sse/utils/proxyFetch.js";
+
+afterEach(() => vi.clearAllMocks());
 
 // Mirror of chatCore's per-model transport guard: use the sourceFormat-matched
 // transport only when the model declares support for that sourceFormat.
@@ -106,13 +114,53 @@ describe("OpenCode Zen split-auth (free models never get the key)", () => {
     expect(h["x-opencode-session"]).toMatch(/^ses_/);
   });
 
-  it("sends Bearer on chat/completions and x-api-key on /responses for paid models", () => {
+  it("sends Bearer on chat/completions and /responses for paid models", () => {
     const ex = new OpenCodeZenExecutor();
     const chat = ex.buildHeaders({ apiKey: "sk-zen-test" }, true, "https://opencode.ai/zen/v1/chat/completions", "deepseek-v4-flash");
     expect(chat["Authorization"]).toBe("Bearer sk-zen-test");
     const responses = ex.buildHeaders({ apiKey: "sk-zen-test" }, true, "https://opencode.ai/zen/v1/responses", "gpt-5.5");
-    expect(responses["Authorization"]).toBeUndefined();
-    expect(responses["x-api-key"]).toBe("sk-zen-test");
+    expect(responses["Authorization"]).toBe("Bearer sk-zen-test");
+    expect(responses["x-api-key"]).toBeUndefined();
+  });
+
+  it("declares Bearer auth for the Responses transport", () => {
+    expect(resolveTransport("opencode-zen", "openai-responses").auth).toMatchObject({
+      header: "Authorization", scheme: "bearer",
+    });
+  });
+
+  it.each(["openai", "claude", "openai-responses"])(
+    "sends Bearer on a paid Responses request with a %s runtime transport",
+    async (format) => {
+      const fetchMock = vi.mocked(proxyAwareFetch);
+      fetchMock.mockResolvedValue(Response.json({ id: "resp_test" }));
+      const ex = new OpenCodeZenExecutor();
+      await ex.execute({
+        model: "gpt-5.5",
+        body: { model: "gpt-5.5", input: "ping" },
+        stream: false,
+        credentials: {
+          apiKey: "sk-zen-test",
+          runtimeTransport: resolveTransport("opencode-zen", format),
+        },
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, options] = fetchMock.mock.calls[0];
+      expect(url).toBe("https://opencode.ai/zen/v1/responses");
+      const headers = new Headers(options.headers);
+      expect(headers.get("authorization")).toBe("Bearer sk-zen-test");
+      expect(headers.has("x-api-key")).toBe(false);
+    },
+  );
+
+  it("keeps x-api-key on the Messages transport", () => {
+    const ex = new OpenCodeZenExecutor();
+    const headers = ex.buildHeaders({
+      apiKey: "sk-zen-test",
+      runtimeTransport: resolveTransport("opencode-zen", "claude"),
+    }, false, "https://opencode.ai/zen/v1/messages", "claude-sonnet-4.6");
+    expect(headers["x-api-key"]).toBe("sk-zen-test");
+    expect(headers["Authorization"]).toBeUndefined();
   });
 
   it("forces responses-only models to /responses even with a stale chat transport", () => {

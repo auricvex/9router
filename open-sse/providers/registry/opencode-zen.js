@@ -32,7 +32,7 @@ export default {
   transports: [
     { format: "openai", baseUrl: "https://opencode.ai/zen/v1/chat/completions", auth: { combined: true, header: "Authorization", scheme: "bearer" } },
     { format: "claude", baseUrl: "https://opencode.ai/zen/v1/messages", auth: { combined: true, header: "x-api-key", scheme: "raw", anthropicVersion: true } },
-    { format: "openai-responses", baseUrl: "https://opencode.ai/zen/v1/responses", auth: { combined: true, header: "x-api-key", scheme: "raw" } },
+    { format: "openai-responses", baseUrl: "https://opencode.ai/zen/v1/responses", auth: { combined: true, header: "Authorization", scheme: "bearer" } },
   ],
   // models[0] is the dashboard default AND the key-validation probe target,
   // so it must be a paid model (free models reject API keys with FreeTierError).
