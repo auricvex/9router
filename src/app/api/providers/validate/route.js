@@ -6,6 +6,7 @@ import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { parseOpencodeValidationResponse } from "@/shared/utils/opencodeValidation";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -423,7 +424,9 @@ export async function POST(request) {
               stream: false,
             }),
           });
-          isValid = res.status !== 401 && res.status !== 403;
+          const result = await parseOpencodeValidationResponse(res);
+          isValid = result.valid;
+          error = result.error;
           break;
         }
 
