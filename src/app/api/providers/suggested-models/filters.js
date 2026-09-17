@@ -21,6 +21,14 @@ export const FILTERS = {
       .filter((m) => (m.id?.endsWith("-free") || KNOWN_FREE_OPENCODE_MODELS.includes(m.id)) && !DEAD_FREE_OPENCODE_MODELS.has(m.id))
       .map((m) => ({ id: m.id, name: m.id })),
 
+  // Zen is the paid gateway: same /v1/models catalog, but no -free filtering.
+  // Free ids stay listed (executor sends them keyless); validation must probe
+  // a paid model since free models reject API keys with FreeTierError.
+  "opencode-zen": (models) =>
+    (Array.isArray(models) ? models : [])
+      .filter((m) => typeof m.id === "string" && m.id.length > 0)
+      .map((m) => ({ id: m.id, name: m.name || m.id })),
+
   // models.dev returns a large catalog; keep only mimo models
   "mimo-free": (models) =>
     (Array.isArray(models) ? models : [])
